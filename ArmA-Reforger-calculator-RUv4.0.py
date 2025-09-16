@@ -2,6 +2,7 @@ from database import mortars
 import bisect
 import os
 import datetime
+import json
 from colorama import init, Fore, Back, Style
 
 # Инициализация colorama для цветного вывода
@@ -11,7 +12,42 @@ class MortarCalculator:
     def __init__(self):
         self.history = []
         self.current_params = {}  # Сохраняем текущие параметры для быстрой смены снарядов
+        self.load_history()  # Загружаем историю при запуске
         
+    def load_history(self):
+        """Загружает историю расчетов из файла"""
+        try:
+            if os.path.exists('mortar_history.json'):
+                with open('mortar_history.json', 'r', encoding='utf-8') as f:
+                    self.history = json.load(f)
+        except Exception as e:
+            print(Fore.RED + f"Ошибка загрузки истории: {e}")
+            self.history = []
+    
+    def save_history(self):
+        """Сохраняет историю расчетов в файл"""
+        try:
+            with open('mortar_history.json', 'w', encoding='utf-8') as f:
+                json.dump(self.history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(Fore.RED + f"Ошибка сохранения истории: {e}")
+
+    def clear_history(self):
+        """Очищает историю расчетов"""
+        try:
+            confirm = input(Fore.RED + "Вы уверены, что хотите очистить всю историю? (да/нет): ").strip().lower()
+            if confirm in ['да', 'yes', 'y', 'д']:
+                self.history = []
+                self.save_history()
+                print(Fore.GREEN + "История успешно очищена!")
+                return True
+            else:
+                print(Fore.YELLOW + "Очистка истории отменена")
+                return False
+        except Exception as e:
+            print(Fore.RED + f"Ошибка при очистке истории: {e}")
+            return False
+
     def find_closest_keys(self, distances, target_dist):
         """Находит ближайшие ключи расстояний для интерполяции"""
         sorted_dists = sorted(distances.keys())
@@ -116,12 +152,11 @@ class MortarCalculator:
 
     def save_to_history(self, calculation):
         """Сохраняет расчет в историю"""
-        calculation['timestamp'] = datetime.datetime.now().strftime("%H:%M:%S")
+        calculation['timestamp'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.history.append(calculation)
         
-        # Ограничиваем историю последними 20 расчетами
-        if len(self.history) > 20:
-            self.history = self.history[-20:]
+        # Сохраняем историю в файл
+        self.save_history()
 
     def show_history(self):
         """Показывает историю расчетов с возможностью повторного использования"""
@@ -135,17 +170,18 @@ class MortarCalculator:
         print(Fore.CYAN + "Выберите расчет для повторного использования или 0 для отмены:")
         
         for i, calc in enumerate(reversed(self.history), 1):
-            print(Fore.WHITE + f"\n{i}. {calc['timestamp']} - {calc['mortar']} - {calc['shell']}")
+            target_name = calc.get('target_name', 'Без названия')
+            print(Fore.WHITE + f"\n{i}. {calc['timestamp']} - {target_name}")
+            print(Fore.CYAN + f"   Миномет: {calc['mortar']} - {calc['shell']}")
             print(Fore.CYAN + f"   Дистанция: {calc['distance']}м")
-            print(Fore.CYAN + f"   Высота миномета: {calc['mortar_alt']}м")
-            print(Fore.CYAN + f"   Высота цели: {calc['target_alt']}м")
-            print(Fore.CYAN + f"   Разница высот: {calc['mortar_alt'] - calc['target_alt']}м")
-            print(Fore.YELLOW + f"   Азимут: {calc.get('azimuth', '0')}")
+            print(Fore.CYAN + f"   Азимут: {calc.get('azimuth', '0')}")
             
             # Показываем результаты расчета
             if calc.get('results'):
                 result = calc['results'][0]  # Берем первый результат
                 print(Fore.GREEN + f"   Угол: {round(result['elevation'])}мил | Время: {result['time']:.1f}с")
+        
+        print(Fore.RED + f"\n{len(self.history) + 1}. Очистить всю историю")
         
         try:
             choice = int(input(Fore.CYAN + "\nВыберите номер расчета (0 - назад): "))
@@ -153,6 +189,10 @@ class MortarCalculator:
                 return None
             if 1 <= choice <= len(self.history):
                 return self.history[-choice]  # Берем из конца списка
+            elif choice == len(self.history) + 1:
+                if self.clear_history():
+                    input(Fore.CYAN + "Нажмите Enter для продолжения...")
+                return None
             else:
                 print(Fore.RED + "Неверный выбор")
                 input(Fore.CYAN + "Нажмите Enter для продолжения...")
@@ -169,10 +209,12 @@ class MortarCalculator:
         
         help_text = [
             ("Быстрая смена снарядов", "После расчета можно сменить снаряд без ввода координат"),
-            ("История", "Можно повторно использовать предыдущие расчеты"),
+            ("История", "История сохраняется между запусками программы"),
             ("Азимут", "Вводите в любом формате: 2-0, 1 5, 05 и т.д."),
+            ("Название цели", "Можно дать название цели для удобства поиска в истории"),
             ("Высоты", "Учитывается разница высот между минометом и целью"),
-            ("Навигация", "В любой момент можно ввести 'назад' для возврата")
+            ("Навигация", "В любой момент можно ввести 'назад' для возврата"),
+            ("Очистка истории", "Можно очистить всю историю расчетов через меню истории")
         ]
         
         for title, desc in help_text:
@@ -188,6 +230,13 @@ class MortarCalculator:
         if azimuth == 'back':
             return 'back'
         return azimuth
+
+    def get_target_name(self):
+        """Запрос названия цели"""
+        target_name = self.get_input("Название цели (для истории)", input_type=str, default="Без названия", allow_back=True)
+        if target_name == 'back':
+            return 'back'
+        return target_name
 
     def perform_calculation(self, mortar_data, shell_data, target_dist, mortar_alt, target_alt):
         """Выполняет расчет и возвращает результаты"""
@@ -249,6 +298,7 @@ class MortarCalculator:
             self.print_header("БЫСТРАЯ СМЕНА СНАРЯДА")
             
             print(Fore.WHITE + f"Текущие параметры:")
+            print(Fore.CYAN + f"Цель: {current_params.get('target_name', 'Без названия')}")
             print(Fore.CYAN + f"Миномет: {current_params['mortar']}")
             print(Fore.CYAN + f"Дистанция: {current_params['distance']}м")
             print(Fore.CYAN + f"Высота миномета: {current_params['mortar_alt']}м")
@@ -286,6 +336,7 @@ class MortarCalculator:
             self.clear_screen()
             self.print_header("РЕЗУЛЬТАТЫ С НОВЫМ СНАРЯДОМ")
             
+            print(Fore.WHITE + f"Цель: {current_params.get('target_name', 'Без названия')}")
             print(Fore.WHITE + f"Миномет: {current_params['mortar']}")
             print(Fore.WHITE + f"Снаряд: {selected_shell}")
             print(Fore.WHITE + f"Дистанция: {current_params['distance']}м")
@@ -321,6 +372,7 @@ class MortarCalculator:
             
             # Сохраняем в историю
             calculation_data = {
+                'target_name': current_params.get('target_name', 'Без названия'),
                 'mortar': current_params['mortar'],
                 'shell': selected_shell,
                 'distance': current_params['distance'],
@@ -364,8 +416,8 @@ class MortarCalculator:
                 
                 # Главный заголовок
                 print(Fore.MAGENTA + "=" * 60)
-                print(Fore.CYAN + "          КАЛЬКУЛЯТОР МИНОМЕТА v3.0")
-                print(Fore.YELLOW + "        Артиллерийский помощник PRO")
+                print(Fore.CYAN + "          КАЛЬКУЛЯТОР МИНОМЕТА v4.0")
+                print(Fore.YELLOW + "        Артиллерийский помощник ArmaReforger")
                 print(Fore.MAGENTA + "=" * 60)
                 
                 print(Fore.CYAN + "\nВыберите действие:")
@@ -388,6 +440,19 @@ class MortarCalculator:
                     self.show_help()
                     return True
                 
+                # Ввод названия цели
+                self.clear_screen()
+                self.print_header("НОВЫЙ РАСЧЕТ")
+                
+                target_name = self.get_target_name()
+                if target_name == 'back':
+                    return self.run_calculation()
+                
+                # Ввод азимута
+                azimuth = self.get_azimuth_input()
+                if azimuth == 'back':
+                    return self.run_calculation()
+                
                 # Выбор миномета
                 mortar_keys = list(mortars.keys())
                 self.print_subheader("Доступные минометы:")
@@ -401,7 +466,7 @@ class MortarCalculator:
                 mortar_choice = self.get_input("\nВыберите номер миномета", input_type=int, min_val=0, max_val=len(mortar_keys))
                 
                 if mortar_choice == 0:
-                    return True  # Возвращаемся в главное меню
+                    return self.run_calculation()  # Возвращаемся в главное меню
                 
                 mortar_choice -= 1
                 selected_mortar = mortar_keys[mortar_choice]
@@ -447,12 +512,9 @@ class MortarCalculator:
                 if target_alt == 'back':
                     return self.run_calculation()
                 
-                # Поправка по азимуту
-                azimuth = self.get_azimuth_input()
-                if azimuth == 'back':
-                    return self.run_calculation()
             else:
                 # Используем preset данные
+                target_name = preset_data.get('target_name', 'Без названия')
                 selected_mortar = preset_data['mortar']
                 selected_shell = preset_data['shell']
                 mortar_data = mortars[selected_mortar]
@@ -468,6 +530,7 @@ class MortarCalculator:
             
             # Сохраняем текущие параметры для возможной смены снаряда
             self.current_params = {
+                'target_name': target_name,
                 'mortar': selected_mortar,
                 'shell': selected_shell,
                 'distance': target_dist,
@@ -480,6 +543,7 @@ class MortarCalculator:
             self.clear_screen()
             self.print_header("РЕЗУЛЬТАТЫ РАСЧЕТА")
             
+            print(Fore.WHITE + f"Цель: {target_name}")
             print(Fore.WHITE + f"Миномет: {selected_mortar} {country}")
             print(Fore.WHITE + f"Снаряд: {selected_shell}")
             print(Fore.WHITE + f"Дистанция: {target_dist}м")
@@ -515,6 +579,7 @@ class MortarCalculator:
             
             # Сохраняем в историю
             calculation_data = {
+                'target_name': target_name,
                 'mortar': selected_mortar,
                 'shell': selected_shell,
                 'distance': target_dist,
